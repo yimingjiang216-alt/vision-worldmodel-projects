@@ -1,9 +1,3 @@
 ﻿# vision-worldmodel-projects
 
-用一组拍的照片把场景重建出 3D 模型，然后让相机沿自己定的轨迹飞过去，渲染出新视角的视频。
-
-流程：多视图影像 → COLMAP 恢复相机位姿和几何 → 3D Gaussian Splatting 重建 → 自定义轨迹渲染。
-
-做这个是因为对空间智能 / 世界模型方向感兴趣，想先把真实场景变成能漫游的 3D 表示。
-
-刚开始做，代码随做随传。
+image → colmap pose & points → 3DGS → camera trajectory → novel view render
