@@ -1,0 +1,10 @@
+{
+  "T": 16,
+  "size": 48,
+  "dim": 192,
+  "depth": 4,
+  "n_steps": 250,
+  "target": "x0",
+  "epochs": 240,
+  "cfg_dropout": 0.25
+}

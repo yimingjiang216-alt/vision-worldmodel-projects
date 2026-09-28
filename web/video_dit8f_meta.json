@@ -1,0 +1,8 @@
+{
+  "T": 8,
+  "size": 32,
+  "dim": 192,
+  "depth": 4,
+  "n_steps": 250,
+  "target": "x0"
+}

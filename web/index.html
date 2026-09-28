@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>可视世界模型 · Action-Conditioned Video World Model</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0d1117; color: #e6edf3;
+         font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 18px 20px 40px; }
+  h1 { font-size: 20px; margin: 4px 0 2px; }
+  .sub { color: #8b949e; font-size: 13px; margin-bottom: 14px; }
+  .grid { display: grid; grid-template-columns: 340px 1fr; gap: 16px; }
+  @media (max-width: 780px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 14px; }
+  .panel h2 { font-size: 14px; margin: 0 0 10px; color: #58a6ff; }
+  canvas { image-rendering: pixelated; background: #000; border-radius: 6px;
+           display: block; width: 100%; max-width: 384px; margin: 0 auto; }
+  .row { margin: 12px 0; }
+  label { font-size: 12px; color: #8b949e; display: flex; justify-content: space-between; }
+  input[type=range] { width: 100%; accent-color: #58a6ff; }
+  .btn { background: #238636; color: #fff; border: 1px solid #2ea043; border-radius: 6px;
+         padding: 8px 14px; font-size: 14px; cursor: pointer; }
+  .btn:hover { background: #2ea043; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn.ghost { background: #21262d; border-color: #30363d; }
+  .pill { display: inline-block; background: #21262d; border: 1px solid #30363d;
+          border-radius: 999px; padding: 3px 10px; font-size: 12px; margin: 2px 3px 2px 0;
+          cursor: pointer; color: #c9d1d9; }
+  .pill.on { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  .log { font-size: 12px; color: #8b949e; min-height: 20px; margin-top: 8px;
+         font-variant-numeric: tabular-nums; }
+  .badge { font-size: 11px; color: #8b949e; background: #21262d; border: 1px solid #30363d;
+           border-radius: 5px; padding: 2px 7px; margin-left: 6px; }
+  .small { font-size: 11px; color: #6e7681; margin-top: 10px; line-height: 1.6; }
+  #play { width: 100%; height: 26px; accent-color: #58a6ff; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>可视世界模型 <span class="badge">Video DiT · onnxruntime-web</span></h1>
+  <div class="sub">输入动作(线速度 v / 转向角速度 &omega;), 扩散模型从纯噪声生成未来 16 帧第一人称视频 (48x48).
+  模型在浏览器本地推理, 全部 DDIM 去噪步骤在网页里完成.</div>
+  <div class="grid">
+    <div class="panel">
+      <h2>动作控制台</h2>
+      <div class="row">
+        <label>线速度 v <span id="vv">1.00 (归一化)</span></label>
+        <input type="range" id="v" min="0" max="1.3" step="0.05" value="1.0">
+      </div>
+      <div class="row">
+        <label>转向角速度 &omega; <span id="omv">0.00 (归一化)</span></label>
+        <input type="range" id="om" min="-0.3" max="0.3" step="0.05" value="0.0">
+      </div>
+      <div class="row">
+        <label>Classifier-Free Guidance <span id="cfgv">8.0</span></label>
+        <input type="range" id="cfg" min="1" max="16" step="0.5" value="8">
+      </div>
+      <div class="row">
+        <label>DDIM 步数 <span id="stepv">25</span></label>
+        <input type="range" id="steps" min="5" max="50" step="5" value="25">
+      </div>
+      <div class="row">
+        <label>随机种子 <span id="seedv">0</span></label>
+        <input type="range" id="seed" min="0" max="99" step="1" value="0">
+      </div>
+      <div class="row">
+        <button class="btn" id="run" disabled>加载模型中…</button>
+        <button class="btn ghost" id="flow" disabled>对比: 真值渲染</button>
+      </div>
+      <div class="log" id="log">正在下载 ONNX 权重 (12MB)…</div>
+      <div class="row">
+        <label>回放 <span id="framev">帧 0/16</span></label>
+        <input type="range" id="play" min="0" max="15" step="1" value="0">
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button class="btn ghost" id="animBtn" style="flex:1">▶ 自动播放</button>
+          <span class="pill" id="fpsPill" style="align-self:center">6 fps</span>
+        </div>
+      </div>
+      <div class="small">
+        使用方法: 调节动作后点"生成". 同一噪声下改变 &omega;, 场景水平平移方向应随之改变
+        (动作可控性). "对比: 真值渲染"用解析渲染器渲染同一动作的参考视频.<br><br>
+        模型: 3.1M 参数 DiT (patch 8, dim 192, depth 4), x0 预测目标, 240 epochs,
+        15% 动作 dropout 训练. 数据: 程序化第一人称 3D 导航视频.
+      </div>
+    </div>
+    <div class="panel">
+      <h2 id="ctitle">世界模型生成 (等待动作输入)</h2>
+      <canvas id="cv" width="256" height="192"></canvas>
+      <div class="small" id="cmeta"></div>
+    </div>
+  </div>
+</div>
+<script src="./ort.min.js"></script>
+<script>
+const META = {T: 16, size: 48, n_steps: 250, target: "x0"};
+const $ = id => document.getElementById(id);
+const log = m => $("log").textContent = m;
+const scale = 8;  // 48px -> 384px 显示
+
+// ---- DDIM 采样需要的 betas/alphas (与 diffusion.py 完全一致) ----
+const N = META.n_steps;
+const betas = new Float32Array(N), alphasCum = new Float32Array(N);
+{ let a = 1;
+  for (let i = 0; i < N; i++) {
+    const b = 1e-4 + (0.02 - 1e-4) * i / (N - 1);
+    betas[i] = b; a *= (1 - b); alphasCum[i] = a;
+  }
+}
+
+// ---- 种子化随机数 (mulberry32) ----
+function rng(seed) {
+  let s = seed >>> 0;
+  return function() {
+    s |= 0; s = s + 0x6D2B79F5 | 0;
+    let t = Math.imul(s ^ s >>> 15, 1 | s);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function randn(shape, rnd) {
+  // Box-Muller
+  const n = shape.reduce((a,b)=>a*b,1);
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i += 2) {
+    const u1 = Math.max(rnd(), 1e-9), u2 = rnd();
+    const r = Math.sqrt(-2 * Math.log(u1));
+    out[i] = r * Math.cos(2*Math.PI*u2);
+    if (i+1 < n) out[i+1] = r * Math.sin(2*Math.PI*u2);
+  }
+  return out;
+}
+
+// ---- 显示 ----
+const cv = $("cv"), ctx = cv.getContext("2d");
+cv.width = META.size * scale; cv.height = META.size * scale;
+let curVideo = null;   // (T,3,H,W) float 0..1
+let curGT = null;
+
+function drawFrame(vid, f) {
+  if (!vid) return;
+  const [T, C, H, W] = vid.shape;
+  const img = ctx.createImageData(W*scale, H*scale);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    // 数据布局为 (T, C, H, W) 连续: (f,c,y,x) -> ((f*C+c)*H+y)*W+x
+    const r = Math.max(0, Math.min(1, vid.data[((f*C+0)*H+y)*W+x])) * 255;
+    const g = Math.max(0, Math.min(1, vid.data[((f*C+1)*H+y)*W+x])) * 255;
+    const b = Math.max(0, Math.min(1, vid.data[((f*C+2)*H+y)*W+x])) * 255;
+    for (let dy = 0; dy < scale; dy++) for (let dx = 0; dx < scale; dx++) {
+      const p = ((y*scale+dy)*(W*scale) + (x*scale+dx)) * 4;
+      img.data[p+0]=r; img.data[p+1]=g; img.data[p+2]=b; img.data[p+3]=255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  $("framev").textContent = "帧 " + (f+1) + "/" + T;
+}
+
+$("play").oninput = e => { if (curVideo) drawFrame(curVideo, +e.target.value); };
+
+// ---- 自动播放: 连续循环播放生成的帧序列 ----
+let animTimer = null, animFps = 6;
+$("animBtn").onclick = () => {
+  if (animTimer) {
+    clearInterval(animTimer); animTimer = null;
+    $("animBtn").textContent = "▶ 自动播放";
+    return;
+  }
+  if (!curVideo) return;
+  $("animBtn").textContent = "⏸ 停止";
+  let f = 0;
+  animTimer = setInterval(() => {
+    if (!curVideo) { clearInterval(animTimer); animTimer = null; return; }
+    drawFrame(curVideo, f);
+    $("play").value = String(f);
+    f = (f + 1) % curVideo.shape[0];
+  }, 1000 / animFps);
+};
+
+// ---- 动作输入 ----
+function readActions() {
+  const v = +$("v").value, om = +$("om").value;
+  $("vv").textContent = v.toFixed(2) + " (归一化)";
+  $("omv").textContent = om.toFixed(2) + " (归一化)";
+  const a = new Float32Array(META.T * 2);
+  for (let t = 0; t < META.T; t++) { a[t*2+0] = v; a[t*2+1] = om; }
+  return a;
+}
+["v","om"].forEach(id => $(id).oninput = readActions);
+["cfg","steps","seed"].forEach(id => $(id).oninput = e => {
+  $("cfgv").textContent = (+$("cfg").value).toFixed(1);
+  $("stepv").textContent = $("steps").value;
+  $("seedv").textContent = $("seed").value;
+});
+
+// ---- 加载模型 ----
+let session = null;
+async function load() {
+  ort.env.wasm.numThreads = 1;  // 本地服务无 crossOriginIsolated, 用单线程
+  session = await ort.InferenceSession.create("./video_dit16b_single.onnx", {
+    executionProviders: ["wasm"], graphOptimizationLevel: "all"
+  });
+  log("模型加载完成, 可以生成");
+  $("run").disabled = false; $("run").textContent = "▶ 生成未来视频";
+  $("flow").disabled = false;
+}
+load().catch(e => log("模型加载失败: " + e));
+
+// ---- 单步去噪 ----
+async function denoise(xt, t, actions, cfg) {
+  const inp = {x_t: new ort.Tensor("float32", xt, [1, META.T, 3, META.size, META.size]),
+               t: new ort.Tensor("int64", BigInt64Array.from([BigInt(t)]), [1]),
+               actions: new ort.Tensor("float32", actions, [1, META.T, 2])};
+  const out = (await session.run(inp))["x0_pred"].data;
+  if (cfg !== 1) {
+    const zero = new Float32Array(actions.length);
+    const inp2 = {...inp, actions: new ort.Tensor("float32", zero, [1, META.T, 2])};
+    const out0 = (await session.run(inp2))["x0_pred"].data;
+    for (let i = 0; i < out.length; i++) out[i] = out0[i] + cfg * (out[i] - out0[i]);
+  }
+  return out;
+}
+
+// ---- DDIM 采样 ----
+$("run").onclick = async () => {
+  if (!session) return;
+  $("run").disabled = true; $("run").textContent = "生成中…";
+  const acts = readActions();
+  const cfg = +$("cfg").value, nS = +$("steps").value, seed = +$("seed").value;
+  const rnd = rng(seed * 7919 + 13);
+  const shape = [1, META.T, 3, META.size, META.size];
+  let x = randn(shape, rnd);
+  const t0 = performance.now();
+  const idx = [];
+  for (let i = 0; i < nS; i++) idx.push(Math.round((N-1) * i / (nS-1)));
+  for (let k = nS - 1; k >= 0; k--) {
+    const t = idx[k];
+    const x0p = await denoise(x, t, acts, cfg);
+    // eps = (x_t - sqrt(ac)*x0) / sqrt(1-ac)
+    const ac = alphasCum[t];
+    const eps = new Float32Array(x.length);
+    for (let i = 0; i < x.length; i++)
+      eps[i] = (x[i] - Math.sqrt(ac)*x0p[i]) / Math.max(Math.sqrt(1-ac), 1e-4);
+    const acp = k > 0 ? alphasCum[idx[k-1]] : 1.0;
+    for (let i = 0; i < x.length; i++)
+      x[i] = Math.sqrt(acp)*x0p[i] + Math.sqrt(Math.max(1-acp,0))*eps[i];
+    $("log").textContent = "DDIM " + (nS-k) + "/" + nS +
+      "  (" + (performance.now()-t0).toFixed(0) + " ms)";
+  }
+  curVideo = {shape: [META.T, 3, META.size, META.size], data: x};
+  drawFrame(curVideo, 0); $("play").value = 0;
+  $("ctitle").textContent = "世界模型生成 · v=" + (+$("v").value).toFixed(2) +
+    " ω=" + (+$("om").value).toFixed(2) + " (CFG " + cfg.toFixed(1) + ", " +
+    (performance.now()-t0).toFixed(0) + " ms)";
+  $("cmeta").textContent = "改变 ω 再生成, 观察场景平移方向; 拖动「回放」逐帧查看 16 帧未来.";
+  $("run").disabled = false; $("run").textContent = "▶ 生成未来视频";
+};
+
+// ---- 真值渲染器 (JS 版, 与 data.py render_frame 一致) ----
+function buildScene(seed) {
+  let s = seed >>> 0;
+  const rnd = () => { s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ s >>> 15, 1 | s);
+    t = (t + Math.imul(t ^ t >>> 7, 61 | t)) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const boxes = [], n = 18, half = 40;
+  let tries = 0;
+  while (boxes.length < n && tries < 400) {
+    tries++;
+    const w = 5 + rnd()*7, d = 5 + rnd()*7;
+    const x = -half+w + rnd()*(2*half-2*w), y = -half+d + rnd()*(2*half-2*d);
+    const h = 10 + rnd()*22;
+    let ok = true;
+    for (const b of boxes)
+      if (Math.abs(x-b[0]) < (w+b[2])/2+3 && Math.abs(y-b[1]) < (d+b[3])/2+3) { ok = false; break; }
+    if (ok) boxes.push([x, y, w, d, h]);
+  }
+  return boxes;
+}
+function renderFrame(state, boxes, W, H, height) {
+  const [x, y, th] = state;
+  const fx = fy = 60, cx = W/2, cy = H/2, half = 40;
+  const fwd = [Math.cos(th), Math.sin(th)], right = [-Math.sin(th), Math.cos(th)];
+  const data = new Float32Array(3*H*W);
+  for (let i = 0; i < H; i++) for (let j = 0; j < W; j++) {
+    const u = (j+0.5-cx)/fx, v = (H-1-i+0.5-cy)/fy;
+    const dz = v, dx = fwd[0]+u*right[0], dy = fwd[1]+u*right[1];
+    let best = Infinity, col = [0.45, 0.62, 0.85];
+    if (dz < -1e-3) {
+      const tg = -height/dz;
+      const gx = x+tg*dx, gy = y+tg*dy;
+      if (Math.abs(gx) < half && Math.abs(gy) < half && tg > 0) best = tg;
+      for (const [bx,by,bw,bd,bh] of boxes) {
+        const tx1 = (bx-bw/2-x)/((Math.abs(dx)>1e-9)?dx:1e-9);
+        const tx2 = (bx+bw/2-x)/((Math.abs(dx)>1e-9)?dx:1e-9);
+        const ty1 = (by-bd/2-y)/((Math.abs(dy)>1e-9)?dy:1e-9);
+        const ty2 = (by+bd/2-y)/((Math.abs(dy)>1e-9)?dy:1e-9);
+        const tmin = Math.max(Math.min(tx1,tx2), Math.min(ty1,ty2));
+        const tmax = Math.min(Math.max(tx1,tx2), Math.max(ty1,ty2));
+        if (tmax > Math.max(tmin, 0)) {
+          const th_ = tmin > 0 ? tmin : tmax;
+          const zh = -th_*dz;
+          if (th_ > 0 && zh >= 0 && zh <= bh && th_ < best) {
+            best = th_;
+            const c = 0.30 + 0.55*(bh-10)/22;
+            const shade = 0.85 + 0.25*zh/Math.max(bh,1e-6);
+            col = [c*0.95*shade, c*0.78*shade, c*0.62*shade];
+          }
+        }
+      }
+      if (!isFinite(best) && tg < 1e8) {
+        // 地面网格
+        const gxx = x+tg*dx, gyy = y+tg*dy;
+        const gx2 = ((gxx+200) % 8 + 8) % 8, gy2 = ((gyy+200) % 8 + 8) % 8;
+        const grid = (Math.min(gx2, 8-gx2) < 0.35 || Math.min(gy2, 8-gy2) < 0.35) ? 0.85 : 0.5;
+        col = [grid*0.72, grid*0.70, grid*0.62]; best = tg;
+      }
+    }
+    const p = (i*W+j)*3;
+    data[p]=col[0]; data[p+1]=col[1]; data[p+2]=col[2];
+  }
+  return data;
+}
+$("flow").onclick = () => {
+  const boxes = buildScene(0);
+  const W = META.size, H = META.size, half = 38;
+  const v = (+$("v").value)*3.0, om = (+$("om").value)*0.9;
+  let s = rng(777);
+  let x=0, y=0, th = s()*2*Math.PI;
+  const frames = [];
+  for (let t = 0; t < META.T; t++) {
+    x = Math.max(-half, Math.min(half, x + v*Math.cos(th)));
+    y = Math.max(-half, Math.min(half, y + v*Math.sin(th)));
+    th += om;
+    frames.push(renderFrame([x,y,th], boxes, W, H, 6.0));
+  }
+  curGT = {shape: [META.T,3,H,W], data: frames[0] && concat(frames)};
+  drawFrame(curGT, 0); $("play").value = 0;
+  $("ctitle").textContent = "真值渲染(解析渲染器) · v=" + (+$("v").value).toFixed(2) +
+    " ω=" + (+$("om").value).toFixed(2);
+};
+function concat(frames) {
+  const n = frames.length * frames[0].length;
+  const out = new Float32Array(n);
+  frames.forEach((f,i) => out.set(f, i*f.length));
+  return out;
+}
+</script>
+</body>
+</html>
