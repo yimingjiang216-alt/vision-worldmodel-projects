@@ -1,0 +1,15 @@
+{
+  "n": 4,
+  "mae": 0.16559164226055145,
+  "frame_diff_gt": 0.02996854015509598,
+  "frame_diff_gen": 0.06671977409860119,
+  "action_ablation_mae_true": 0.14108774531632662,
+  "action_ablation_mae_shuffled": 0.14439015928655863,
+  "action_ablation_gain": 0.00330241397023201,
+  "action_flow_left": -0.7083333333333333,
+  "action_flow_straight": 0.5833333333333335,
+  "action_flow_right": -1.4999999999999998,
+  "action_controllable": false,
+  "ddim_steps": 25,
+  "ddpm_steps": 250
+}
