@@ -50,6 +50,29 @@
 
 训练目标由 ε 预测改为 x0 预测后，纯噪声生成的 MAE 由 0.42 降到 0.135。
 
+## 实验记录（从失败到成功的调优过程）
+
+### 短序列模型（ckpt5 → ckpt8）
+
+| 配置 | 训练目标 | 结果 |
+|---|---|---|
+| ckpt5（64x64，T=8） | ε 预测 | 去噪优秀（t=10 时 x0 MAE 0.015），但**从纯噪声生成失败**：输出趋于全黑（x0 估计被 1/√ᾱₜ 放大噪声淹没），动作消融增益≈0 |
+| ckpt6（32x32，T=4） | ε 预测 | 训练损失收敛 25 倍，但纯噪声生成仍失败（MAE 0.42） |
+| ckpt7（32x32，T=4） | **x0 预测** | 生成成功：MAE 0.42 → **0.135**；但动作响应（0.0135）小于采样噪声（0.082），条件被稀释 |
+| ckpt8（32x32，T=4） | x0 + **CFG dropout 0.15** | CFG 采样下动作响应/噪声比 0.10 → **1.14x**（cfg=8），转向-位移斜率与真值同号 |
+
+### 长序列模型（ckpt16f / ckpt16b，16 帧 / 48x48）
+
+4/8 帧生成结果"不像视频"（时长不足 1 秒），为此扩展序列长度与分辨率：
+
+| 配置 | 帧数 | 分辨率 | epochs | cfg_dropout | val_mse | 生成 MAE | 响应/噪声比 |
+|---|---|---|---|---|---|---|---|
+| ckpt8f | 8 | 32x32 | 150 | 0.15 | 0.0036 | 0.166 | 1.14x（CFG=8） |
+| ckpt16f | 16 | 48x48 | 90 | 0.15 | 0.0047 | 0.136 | 0.24x（CFG=8） |
+| **ckpt16b** | **16** | **48x48** | **240** | **0.25** | **0.0030** | **0.125** | **1.67x（CFG=16，通过 >1.5x 判据）** |
+
+关键改进：把 CFG dropout 由 0.15 提高到 0.25 并续训至 240 epochs——更充分的无条件分支训练让采样时 CFG 有更大可放大余量（CFG 扫描：8→0.74x，16→1.67x，24→2.69x，32→3.75x，单调放大）。代价是高 CFG 下画面动态会被抑制，因此展示用 CFG=8（动态自然），可控性评估用 CFG=16（响应充分）。
+
 ## 动作可控性：未通过
 
 `eval_control.py` 的判据是两条同时满足：
@@ -81,6 +104,26 @@ ckpt16b 通过了响应比这一条（1.67x > 1.5），但转向-位移斜率量
 - 做两组对照：「固定噪声、只改动作」与「固定动作、只改噪声」，以两者比值作为动作响应判据。
 
 指标在真值上不成立就不能用来评判生成结果，这一步是整个评估的前提。
+
+## 复现
+
+```bash
+pip install -r requirements.txt
+# 16 帧 / 48x48 主模型（x0 目标，约 2h CPU）
+python train.py --epochs 90 --batch 64 --size 48 --T 16 --dim 192 --depth 4 \
+  --target x0 --cfg_dropout 0.15 --n_train 768 --n_val 96 --out ckpt16f
+# 续训加强动作可控性（cfg_dropout 0.25，再约 3.3h CPU）→ ckpt16b
+python train.py --resume ckpt16f/video_dit.pt --epochs 150 --batch 64 --size 48 --T 16 \
+  --dim 192 --depth 4 --target x0 --cfg_dropout 0.25 --lr 7e-4 \
+  --n_train 768 --n_val 96 --out ckpt16b
+# 采样 + 生成质量评估
+python sample.py --ckpt ckpt16b/video_dit.pt --n 4 --ddim 25 --cfg 8
+# 动作可控性严格评估（真值校准，CFG=16）
+python eval_control.py --ckpt ckpt16b/video_dit.pt --n 16 --ddim 25 --cfg 16
+```
+
+Kaggle T4 GPU 一键复现（8M 参数加强版，dim 256 / depth 6，300 epochs）：
+`kaggle_world_model_gpu.ipynb`，全部源码已内联，开箱即跑。
 
 ## 浏览器 demo
 
