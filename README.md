@@ -6,10 +6,27 @@
 
 > **配套项目**: [mini-vla-pi0](https://github.com/yimingjiang216-alt/mini-vla-pi0) ——
 > 同一套 3D 导航数据管线（`data.py` 共享）上从零训练的 π0 风格 VLA 策略
-> （观测 + 语言指令 → 动作，语言响应 gap ≈ 0.96）。两者即插即用：
+> （观测 + 语言指令 → 动作）。两者即插即用：
 > VLA 输出动作 → 由共享数据管线渲染"想象未来" → 构成"决策-预演"闭环
 > （见 mini-vla-pi0 的 `world_model_loop` 图与演示视频）；后续可用本项目的
 > 世界模型替换解析渲染器，走向"世界模型为 VLA 批量生成训练数据"的路线。
+
+## 一、全景：从动作到视频的链条
+
+```
+data.py        场景 + 动作序列 → 光栅化渲染 → 16 帧 48×48 真值视频 (训练目标)
+   ↓
+train.py       真值视频 DDPM 前向加噪 + 动作条件 (v, ω 逐帧注入)
+               → 模型学 x0 预测 (15%/25% 概率丢弃动作, 训练无条件分支)
+   ↓
+sample.py      纯噪声 + 动作序列 → DDIM 25 步去噪 (CFG=8) → 16 帧视频
+   ↓
+eval_control.py  可控性检验: 相位相关测帧间位移;
+                 固定噪声只改动作 vs 固定动作只改噪声 → 响应比 + 斜率对照
+   ↓
+结论           生成质量成立 (MAE 0.125, 帧间差接近真值);
+               动作可控性未通过 (响应比 1.67x 达标, 但斜率量级与方向不对)
+```
 
 ---
 
@@ -103,7 +120,17 @@ ckpt16b 通过了响应比这一条（1.67x > 1.5），但转向-位移斜率量
 - 先在真值渲染视频上校准指标有效区间（|ω| > 0.3 rad/帧 时相位相关假设失效）；
 - 做两组对照：「固定噪声、只改动作」与「固定动作、只改噪声」，以两者比值作为动作响应判据。
 
-指标在真值上不成立就不能用来评判生成结果，这一步是整个评估的前提。
+指标先在真值上校准，再用于生成结果。
+
+## 方法与出处
+
+| 本仓库用到的方法 | 出处 |
+|---|---|
+| DiT 架构 / adaLN-zero | Peebles & Xie, *Scalable Diffusion Models with Transformers*, ICCV 2023, arXiv:2212.09748 |
+| DDPM 前向加噪 / x0 预测 | Ho et al., *Denoising Diffusion Probabilistic Models*, NeurIPS 2020, arXiv:2006.11239 |
+| DDIM 采样 | Song et al., *Denoising Diffusion Implicit Models*, ICLR 2021, arXiv:2010.02502 |
+| 视频扩散（时序 token 谱系） | Ho et al., *Video Diffusion Models*, arXiv:2204.03458 |
+| 「生成模型当物理模拟器」的定位 | 思想溯源至 NVIDIA, *Cosmos World Foundation Model Platform for Physical AI*, arXiv:2501.03575；本仓库为独立从零实现，3M 参数 / 合成小场景，与 Cosmos 的规模和数据域不同 |
 
 ## 复现
 
