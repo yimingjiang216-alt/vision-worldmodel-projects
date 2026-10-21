@@ -162,4 +162,4 @@ Kaggle T4 GPU 一键复现（8M 参数加强版，dim 256 / depth 6，300 epochs
 
 ## 相关说明
 
-扩散模型的时间步嵌入、CFG 公式、adaLN-zero 的实现细节，以及「为什么换成 x0 预测有效」「为什么 dropout 提高后响应比上升」的分析，写在配套的项目报告里。
+扩散模型的时间步嵌入、CFG 公式、adaLN-zero 的实现细节见 `model.py` / `diffusion.py` 注释；x0 预测与 CFG dropout 的对比实验见本文「实验记录」一节（ckpt6 → ckpt7、ckpt16f → ckpt16b）。
